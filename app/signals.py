@@ -7,7 +7,7 @@ from typing import Optional
 from app.config import load_settings
 from app.db.indicators import get_indicator, get_latest_indicator
 from app.db.prices import get_candle, get_latest_candle
-from app.db.signals import insert_signal_if_new
+from app.db.signals import insert_signal
 from app.logger import setup_logger
 
 
@@ -66,7 +66,7 @@ async def generate_for_symbol(symbol: str, timeframe: str, log, date: int | None
             return
         tp = entry + (risk * RR_MULTIPLIER)
 
-        inserted = await insert_signal_if_new(
+        inserted = await insert_signal(
             symbol=symbol,
             timeframe=timeframe,
             date=c_date,
@@ -103,7 +103,7 @@ async def generate_for_symbol(symbol: str, timeframe: str, log, date: int | None
             return
         tp = entry - (risk * RR_MULTIPLIER)
 
-        inserted = await insert_signal_if_new(
+        inserted = await insert_signal(
             symbol=symbol,
             timeframe=timeframe,
             date=c_date,
