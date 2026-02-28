@@ -5,3 +5,4 @@ __pycache__/
 database/
 exports/
 *.db
+logs/
