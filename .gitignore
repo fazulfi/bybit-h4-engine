@@ -7,3 +7,5 @@ exports/
 *.db
 logs/
 *.log
+logs/*.log
+logs/
