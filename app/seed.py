@@ -6,7 +6,7 @@ from typing import List
 
 from app.bybit.rest import BybitREST
 from app.config import load_settings
-from app.db.prices import upsert_candle
+from app.db.prices import upsert_candles_bulk
 from app.logger import setup_logger
 from app.timeutil import normalize_bybit_ts
 from app.universe import build_universe
@@ -21,19 +21,23 @@ async def seed_symbol(
 ) -> None:
     klines = await client.get_kline(symbol, timeframe, limit=limit)
 
+    rows = []
     for k in klines:
         open_ts_s = normalize_bybit_ts(k["start"])  # ms → seconds
-
-        await upsert_candle(
-            symbol=symbol,
-            timeframe=timeframe,
-            date=open_ts_s,
-            o=k["open"],
-            h=k["high"],
-            l=k["low"],
-            c=k["close"],
-            v=k["volume"],
+        rows.append(
+            (
+                symbol,
+                timeframe,
+                open_ts_s,
+                float(k["open"]),
+                float(k["high"]),
+                float(k["low"]),
+                float(k["close"]),
+                float(k["volume"]),
+            )
         )
+
+    await upsert_candles_bulk(rows)
 
     log.info(f"Seeded {symbol}: {len(klines)} candles")
 

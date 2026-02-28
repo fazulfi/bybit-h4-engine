@@ -52,6 +52,44 @@ async def upsert_candle(
         await conn.close()
 
 
+async def upsert_candles_bulk(
+    rows: List[tuple[str, str, int, float, float, float, float, float]],
+    conn: Optional[aiosqlite.Connection] = None,
+    commit: bool = True,
+) -> int:
+    """
+    Bulk upsert candles. Rows are:
+      (symbol, timeframe, date, open, high, low, close, volume)
+    """
+    if not rows:
+        return 0
+
+    sql = """
+    INSERT INTO prices(symbol, timeframe, date, open, high, low, close, volume)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(symbol, timeframe, date) DO UPDATE SET
+      open=excluded.open,
+      high=excluded.high,
+      low=excluded.low,
+      close=excluded.close,
+      volume=excluded.volume
+    """
+
+    owns_conn = conn is None
+    if conn is None:
+        conn = await _connect()
+
+    try:
+        await conn.executemany(sql, rows)
+        if commit:
+            await conn.commit()
+    finally:
+        if owns_conn:
+            await conn.close()
+
+    return len(rows)
+
+
 async def get_last_ts(symbol: str, timeframe: str) -> Optional[int]:
     """
     Return latest candle OPEN time (seconds UTC) for symbol+timeframe.
@@ -67,16 +105,23 @@ async def get_last_ts(symbol: str, timeframe: str) -> Optional[int]:
     finally:
         await conn.close()
 
-async def get_last_closed_ts(symbol: str, timeframe: str) -> Optional[int]:
+async def get_last_closed_open_ts(symbol: str, timeframe: str) -> Optional[int]:
     """
-    Return last CLOSED candle open time.
-    For H4: last_closed = last_open - 14400
+    Return last CLOSED candle OPEN time.
+    For H4: last_closed_open = last_open - 14400
     """
     last_open = await get_last_ts(symbol, timeframe)
     if not last_open:
         return None
     tf_sec = int(timeframe) * 60  # timeframe '240' -> 14400
     return int(last_open) - tf_sec
+
+
+async def get_last_closed_ts(symbol: str, timeframe: str) -> Optional[int]:
+    """
+    Backward-compatible alias for get_last_closed_open_ts().
+    """
+    return await get_last_closed_open_ts(symbol, timeframe)
 
 
 async def get_recent_candles(symbol: str, timeframe: str, limit: int) -> List[CandleRow]:
@@ -157,32 +202,7 @@ async def get_window_metrics_prev20(symbol: str, timeframe: str, current_date: i
     """
     conn = await _connect()
     try:
-        # Take 20 candles before current_date
-        cur = await conn.execute(
-            """
-            WITH prev AS (
-              SELECT high, low, volume
-              FROM prices
-              WHERE symbol=? AND timeframe=? AND date < ?
-              ORDER BY date DESC
-              LIMIT 20
-            )
-            SELECT
-              MAX(high) AS hh20,
-              MIN(low)  AS ll20,
-              AVG(volume) AS avg_vol20
-            FROM prev
-            """,
-            (symbol, timeframe, current_date),
-        )
-        row = await cur.fetchone()
-        if not row or row[0] is None:
-            return None
-        return {
-            "hh20": float(row[0]),
-            "ll20": float(row[1]),
-            "avg_vol20": float(row[2]),
-        }
+        return await get_window_metrics_prev20_with_conn(conn, symbol, timeframe, current_date)
     finally:
         await conn.close()
 
@@ -199,6 +219,24 @@ async def get_all_dates(symbol: str, timeframe: str) -> list[int]:
     )
     return [int(r[0]) for r in rows]
 
+
+async def get_all_dates_with_conn(
+    conn: aiosqlite.Connection,
+    symbol: str,
+    timeframe: str,
+) -> list[int]:
+    cur = await conn.execute(
+        """
+        SELECT date
+        FROM prices
+        WHERE symbol=? AND timeframe=?
+        ORDER BY date ASC
+        """,
+        (symbol, timeframe),
+    )
+    rows = await cur.fetchall()
+    return [int(r[0]) for r in rows]
+
 async def get_recent_candles_upto(
     symbol: str,
     timeframe: str,
@@ -208,22 +246,64 @@ async def get_recent_candles_upto(
 
     conn = await _connect()
     try:
-        cur = await conn.execute(
-            """
-            SELECT date, open, high, low, close, volume
-            FROM prices
-            WHERE symbol=? AND timeframe=? AND date <= ?
-            ORDER BY date DESC
-            LIMIT ?
-            """,
-            (symbol, timeframe, end_date, limit),
-        )
-        rows = await cur.fetchall()
-        rows = list(reversed(rows))
-        return [
-            (int(r[0]), float(r[1]), float(r[2]),
-             float(r[3]), float(r[4]), float(r[5]))
-            for r in rows
-        ]
+        return await get_recent_candles_upto_with_conn(conn, symbol, timeframe, end_date, limit)
     finally:
         await conn.close()
+
+
+async def get_window_metrics_prev20_with_conn(
+    conn: aiosqlite.Connection,
+    symbol: str,
+    timeframe: str,
+    current_date: int,
+) -> Optional[Dict[str, float]]:
+    cur = await conn.execute(
+        """
+        WITH prev AS (
+          SELECT high, low, volume
+          FROM prices
+          WHERE symbol=? AND timeframe=? AND date < ?
+          ORDER BY date DESC
+          LIMIT 20
+        )
+        SELECT
+          MAX(high) AS hh20,
+          MIN(low)  AS ll20,
+          AVG(volume) AS avg_vol20
+        FROM prev
+        """,
+        (symbol, timeframe, current_date),
+    )
+    row = await cur.fetchone()
+    if not row or row[0] is None:
+        return None
+    return {
+        "hh20": float(row[0]),
+        "ll20": float(row[1]),
+        "avg_vol20": float(row[2]),
+    }
+
+
+async def get_recent_candles_upto_with_conn(
+    conn: aiosqlite.Connection,
+    symbol: str,
+    timeframe: str,
+    end_date: int,
+    limit: int,
+) -> List[CandleRow]:
+    cur = await conn.execute(
+        """
+        SELECT date, open, high, low, close, volume
+        FROM prices
+        WHERE symbol=? AND timeframe=? AND date <= ?
+        ORDER BY date DESC
+        LIMIT ?
+        """,
+        (symbol, timeframe, end_date, limit),
+    )
+    rows = await cur.fetchall()
+    rows = list(reversed(rows))
+    return [
+        (int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5]))
+        for r in rows
+    ]

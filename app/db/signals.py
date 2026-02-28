@@ -25,7 +25,7 @@ async def _connect() -> aiosqlite.Connection:
 async def insert_signal_if_new(
     symbol: str,
     timeframe: str,
-    date: int,  # candle CLOSE time (seconds UTC)
+    date: int,  # candle OPEN time (seconds UTC), aligned with prices/indicators.date
     signal_type: str,
     side: str,
     entry: float,

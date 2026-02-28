@@ -18,7 +18,7 @@ RR_MULTIPLIER = 2.0
 
 async def generate_for_symbol(symbol: str, timeframe: str, log, date: int | None = None):
     """
-    Generate breakout signal for a specific candle date (recommended: last_closed).
+    Generate breakout signal for a specific candle OPEN timestamp (recommended: last_closed_open).
     If date is None, fallback to latest (not ideal for scheduler).
     """
 

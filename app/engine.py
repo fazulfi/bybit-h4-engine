@@ -12,7 +12,7 @@ from app.seed import seed_h4_prices
 from app.signals import generate_for_symbol
 from app.timeutil import normalize_bybit_ts
 from app.universe import build_universe
-from app.db.prices import get_last_closed_ts
+from app.db.prices import get_last_closed_open_ts
 
 import time
 from datetime import datetime, timezone, timedelta
@@ -53,7 +53,7 @@ async def handle_candle(
     open_ts_s = normalize_bybit_ts(candle["start"])
 
     tf_sec = int(timeframe) * 60
-    closed_ts = int(open_ts_s) - tf_sec
+    last_closed_open_ts = int(open_ts_s) - tf_sec
 
     # 1) Save price
     await upsert_candle(
@@ -69,10 +69,10 @@ async def handle_candle(
     log.info(f"PRICE SAVED {symbol} {open_ts_s}")
 
     # 2) Compute indicators (for last CLOSED candle)
-    await compute_for_candle(symbol, str(timeframe), int(closed_ts), log)
+    await compute_for_candle(symbol, str(timeframe), int(last_closed_open_ts), log)
 
     # 3) Generate signal (for last CLOSED candle)
-    await generate_for_symbol(symbol, str(timeframe), log, date=int(closed_ts))
+    await generate_for_symbol(symbol, str(timeframe), log, date=int(last_closed_open_ts))
 
     # 4) Paper (optional)
     if dryrun:
@@ -106,7 +106,7 @@ async def run_once(
     log.info("Generating signals for universe...")
     for sym in symbols:
         try:
-            last_ts = await get_last_closed_ts(sym, str(timeframe))
+            last_ts = await get_last_closed_open_ts(sym, str(timeframe))
             if not last_ts:
                 continue
 
@@ -183,7 +183,7 @@ async def main_engine(
                 )
 
     # 2) ambil candle terakhir
-                last_ts = await get_last_closed_ts(sym, str(timeframe))
+                last_ts = await get_last_closed_open_ts(sym, str(timeframe))
                 if not last_ts:
                     continue
 
