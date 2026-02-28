@@ -6,6 +6,7 @@ import asyncio
 from app.db.trade_manager import init_db
 from app.logger import setup_logger
 from app.trade_manager.lifecycle import run_trade_manager
+from app.metrics_tm import start_metrics_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -13,13 +14,12 @@ def build_parser() -> argparse.ArgumentParser:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="Run one ingest iteration")
     mode.add_argument("--daemon", action="store_true", help="Run all loops continuously")
-    p.add_argument("--once", action="store_true", help="Run one ingest iteration")
-    p.add_argument("--daemon", action="store_true", help="Run all loops continuously")
     return p
 
 
 async def _run(args) -> None:
     log = setup_logger("trade_manager")
+    start_metrics_server(port=9101, addr="127.0.0.1")
     await init_db()
 
     once = bool(args.once)
