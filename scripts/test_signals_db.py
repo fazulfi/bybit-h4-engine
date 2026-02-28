@@ -1,12 +1,14 @@
 import asyncio
-from app.db.signals import insert_signal_if_new, get_new_signals, update_signal_status
+
+from app.db.signals import get_recent_signals, insert_signal
+
 
 async def main():
     sym = "TESTUSDT"
     tf = "240"
     date = 1700000000
 
-    inserted = await insert_signal_if_new(
+    inserted = await insert_signal(
         symbol=sym,
         timeframe=tf,
         date=date,
@@ -19,8 +21,8 @@ async def main():
     )
     print("inserted:", inserted)
 
-    # Try insert again (should be False)
-    inserted2 = await insert_signal_if_new(
+    # Try insert again (duplicates are allowed in raw signals)
+    inserted2 = await insert_signal(
         symbol=sym,
         timeframe=tf,
         date=date,
@@ -32,11 +34,8 @@ async def main():
     )
     print("inserted_again:", inserted2)
 
-    news = await get_new_signals()
-    print("new_signals:", news)
+    recent = await get_recent_signals(limit=20)
+    print("recent_signals:", recent)
 
-    await update_signal_status(sym, tf, date, "BREAKOUT_T2", "PAPER_OPENED")
-    news_after = await get_new_signals()
-    print("new_after_update:", news_after)
 
 asyncio.run(main())

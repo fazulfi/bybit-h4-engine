@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from app.config import load_settings
-from app.db.prices import upsert_candle
+from app.db.prices import get_last_closed_open_ts, upsert_candle
 from app.indicators import compute_for_candle
 from app.logger import setup_logger
-from app.paper_engine import run_paper_cycle
 from app.seed import seed_h4_prices
 from app.signals import generate_for_symbol
 from app.timeutil import normalize_bybit_ts
 from app.universe import build_universe
-from app.db.prices import get_last_closed_open_ts
-
-import time
-from datetime import datetime, timezone, timedelta
 
 
 def seconds_until_next_h4_close() -> int:
@@ -31,15 +27,15 @@ def seconds_until_next_h4_close() -> int:
 
     return int((next_close - now).total_seconds())
 
+
 async def handle_candle(
     candle: Dict[str, Any],
     timeframe: str,
     log,
-    dryrun: bool,
 ) -> None:
     """
     Full pipeline for one confirmed candle:
-    save_price -> indicators -> signals -> paper (optional)
+    save_price -> indicators -> signals
     """
     symbol = candle.get("symbol")
     interval = str(candle.get("interval"))
@@ -49,13 +45,11 @@ async def handle_candle(
     if interval != str(timeframe):
         return
 
-    # Bybit start time in ms -> seconds (UTC)
     open_ts_s = normalize_bybit_ts(candle["start"])
 
     tf_sec = int(timeframe) * 60
     last_closed_open_ts = int(open_ts_s) - tf_sec
 
-    # 1) Save price
     await upsert_candle(
         symbol=symbol,
         timeframe=str(timeframe),
@@ -68,24 +62,13 @@ async def handle_candle(
     )
     log.info(f"PRICE SAVED {symbol} {open_ts_s}")
 
-    # 2) Compute indicators (for last CLOSED candle)
     await compute_for_candle(symbol, str(timeframe), int(last_closed_open_ts), log)
-
-    # 3) Generate signal (for last CLOSED candle)
     await generate_for_symbol(symbol, str(timeframe), log, date=int(last_closed_open_ts))
-
-    # 4) Paper (optional)
-    if dryrun:
-        log.info("DRYRUN: skipping paper engine")
-        return
-
-    await run_paper_cycle(str(timeframe))
 
 
 async def run_once(
     timeframe: str,
     log,
-    dryrun: bool,
     force_universe_refresh: bool,
     seed_limit: int = 200,
 ) -> None:
@@ -94,7 +77,6 @@ async def run_once(
     - build universe
     - seed historical candles (REST)
     - generate signals for all symbols
-    - run paper once (unless dryrun)
     """
     log.info("ONCE mode: building universe...")
     symbols: List[str] = await build_universe(force_refresh=force_universe_refresh)
@@ -110,21 +92,10 @@ async def run_once(
             if not last_ts:
                 continue
 
-            await generate_for_symbol(
-                sym,
-                str(timeframe),
-                log,
-                date=int(last_ts)
-            )
+            await generate_for_symbol(sym, str(timeframe), log, date=int(last_ts))
         except Exception as e:
             log.error(f"Signal error {sym}: {e}")
 
-    if dryrun:
-        log.info("DRYRUN: skipping paper engine")
-        return
-
-    log.info("Running paper cycle...")
-    await run_paper_cycle(str(timeframe))
     log.info("ONCE mode complete.")
 
 
@@ -132,27 +103,20 @@ async def main_engine(
     settings=None,
     timeframe_override: Optional[str] = None,
     log_level_override: Optional[str] = None,
-    dryrun: bool = False,
     once: bool = False,
     force_universe_refresh: bool = False,
 ) -> None:
-    """
-    Main engine:
-    - does NOT mutate settings
-    - uses overrides passed from CLI/main.py
-    """
     if settings is None:
         settings = load_settings(require_keys=False)
 
     timeframe = str(timeframe_override or getattr(settings, "timeframe", "240"))
-    log_level = str(log_level_override or getattr(settings, "log_level", "INFO"))
+    _ = str(log_level_override or getattr(settings, "log_level", "INFO"))
     log = setup_logger("engine")
 
     if once:
         await run_once(
             timeframe=timeframe,
             log=log,
-            dryrun=dryrun,
             force_universe_refresh=force_universe_refresh,
         )
         return
@@ -167,14 +131,12 @@ async def main_engine(
         wait_seconds = seconds_until_next_h4_close()
 
         log.info(f"Sleeping {wait_seconds}s until next H4 close...")
-        await asyncio.sleep(wait_seconds + 10)  # buffer 10 detik
+        await asyncio.sleep(wait_seconds + 10)
 
         try:
             log.info("H4 closed. Updating candles...")
 
             for sym in symbols:
-
-    # 1) update price
                 await seed_h4_prices(
                     symbols=[sym],
                     timeframe=str(timeframe),
@@ -182,7 +144,6 @@ async def main_engine(
                     log=log,
                 )
 
-    # 2) ambil candle terakhir
                 last_ts = await get_last_closed_open_ts(sym, str(timeframe))
                 if not last_ts:
                     continue
@@ -190,14 +151,11 @@ async def main_engine(
                 await compute_for_candle(sym, str(timeframe), int(last_ts), log)
                 await generate_for_symbol(sym, str(timeframe), log, date=int(last_ts))
 
-            if not dryrun:
-                log.info("Running paper cycle...")
-                await run_paper_cycle(str(timeframe))
-
             log.info("Cycle complete.")
 
         except Exception as e:
             log.error(f"H4 cycle error: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main_engine())

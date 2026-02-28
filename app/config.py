@@ -36,9 +36,6 @@ def _env_float(key: str, default: float) -> float:
 
 @dataclass(frozen=True)
 class Settings:
-
-    paper_notional: float
-
     # Bybit
     bybit_api_key: str
     bybit_api_secret: str
@@ -49,18 +46,12 @@ class Settings:
     min_turnover_24h: float
     max_symbols: int
 
-    # Paper trading
-    paper_start_balance: float
-    fee_rate: float
-    slippage: float
-
     # Paths
     root_dir: Path
     db_dir: Path
     prices_db: Path
     indicators_db: Path
     signals_db: Path
-    paper_db: Path
     logs_dir: Path
 
 
@@ -75,11 +66,9 @@ def load_settings(require_keys: bool = False) -> Settings:
     db_dir = root_dir / "database"
     logs_dir = root_dir / "logs"
 
-    # Create dirs if missing
     db_dir.mkdir(exist_ok=True)
     logs_dir.mkdir(exist_ok=True)
 
-    # Keys: optional for now
     api_key = os.getenv("BYBIT_API_KEY", "")
     api_secret = os.getenv("BYBIT_API_SECRET", "")
     if require_keys and (not api_key or not api_secret):
@@ -95,15 +84,10 @@ def load_settings(require_keys: bool = False) -> Settings:
         timeframe=timeframe,
         min_turnover_24h=_env_float("MIN_TURNOVER_24H", 5_000_000),
         max_symbols=_env_int("MAX_SYMBOLS", 300),
-        paper_start_balance=_env_float("PAPER_START_BALANCE", 10000.0),
-        paper_notional=_env_float("PAPER_NOTIONAL", 10.0),
-        fee_rate=_env_float("FEE_RATE", 0.0006),
-        slippage=_env_float("SLIPPAGE", 0.0002),
         root_dir=root_dir,
         db_dir=db_dir,
         prices_db=db_dir / "prices.db",
         indicators_db=db_dir / "indicators.db",
         signals_db=db_dir / "signals.db",
-        paper_db=db_dir / "paper.db",
         logs_dir=logs_dir,
     )
