@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 
+from app.metrics_tm import tm_dropped_ticks_total, tm_exceptions_total, tm_reconnect_total
 from app.trade_manager.router import on_tick
 from app.trade_manager.state import ManagerState
 
@@ -77,6 +78,7 @@ async def tick_worker_loop(state: ManagerState, hit_mode: str, log) -> None:
         try:
             await on_tick(state, tick["symbol"], tick, hit_mode)
         except Exception as exc:
+            tm_exceptions_total.inc()
             log.warning("TM tick worker error: %s", exc)
         finally:
             state.tick_queue.task_done()
@@ -106,6 +108,7 @@ async def ws_loop(state: ManagerState, ws_url: str, hit_mode: str, log) -> None:
                     async with state.global_lock:
                         force_reconnect = state.force_reconnect
                     if force_reconnect:
+                        tm_reconnect_total.inc()
                         log.warning("TM WS force reconnect triggered by liveness checker")
                         break
 
@@ -133,12 +136,15 @@ async def ws_loop(state: ManagerState, ws_url: str, hit_mode: str, log) -> None:
                         try:
                             state.tick_queue.put_nowait(quote)
                         except asyncio.QueueFull:
+                            tm_dropped_ticks_total.inc()
                             async with state.global_lock:
                                 state.dropped_ticks += 1
 
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            tm_exceptions_total.inc()
+            tm_reconnect_total.inc()
             async with state.global_lock:
                 state.ws_state = "DISCONNECTED"
                 state.subscribed_symbols.clear()

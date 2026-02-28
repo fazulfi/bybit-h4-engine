@@ -3,6 +3,13 @@ from __future__ import annotations
 import asyncio
 import time
 
+from app.metrics_tm import (
+    tm_last_heartbeat_age_seconds,
+    tm_last_tick_age_seconds,
+    tm_open_positions,
+    tm_subscribed_symbols,
+    tm_ws_connected,
+)
 from app.trade_manager.state import ManagerState
 
 
@@ -14,6 +21,7 @@ async def health_loop(state: ManagerState, log_interval_sec: int, liveness_timeo
             subscribed_count = len(state.subscribed_symbols)
             ws_state = state.ws_state
             last_heartbeat_ts = state.last_heartbeat_ts
+            last_tick_ts = state.last_tick_ts
             dropped_ticks = state.dropped_ticks
 
             is_stale = (
@@ -23,6 +31,12 @@ async def health_loop(state: ManagerState, log_interval_sec: int, liveness_timeo
             )
             if is_stale:
                 state.force_reconnect = True
+
+        tm_ws_connected.set(1 if ws_state == "CONNECTED" else 0)
+        tm_open_positions.set(open_count)
+        tm_subscribed_symbols.set(subscribed_count)
+        tm_last_heartbeat_age_seconds.set(max(0, now - last_heartbeat_ts) if last_heartbeat_ts else 0)
+        tm_last_tick_age_seconds.set(max(0, now - last_tick_ts) if last_tick_ts else 0)
 
         log.info(
             "TM HEARTBEAT ws=%s open=%s subscribed=%s dropped_ticks=%s",
