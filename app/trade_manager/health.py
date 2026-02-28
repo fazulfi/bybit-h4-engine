@@ -34,5 +34,8 @@ async def health_loop(state: ManagerState, log_interval_sec: int, liveness_timeo
 
         if is_stale:
             log.warning("TM LIVENESS stale heartbeat=%ss, scheduling reconnect", now - last_heartbeat_ts)
+        if ws_state == "CONNECTED" and last_heartbeat_ts:
+            if (now - last_heartbeat_ts) > liveness_timeout_sec:
+                log.warning("TM LIVENESS stale heartbeat=%ss", now - last_heartbeat_ts)
 
         await asyncio.sleep(log_interval_sec)

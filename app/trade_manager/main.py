@@ -13,6 +13,8 @@ def build_parser() -> argparse.ArgumentParser:
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="Run one ingest iteration")
     mode.add_argument("--daemon", action="store_true", help="Run all loops continuously")
+    p.add_argument("--once", action="store_true", help="Run one ingest iteration")
+    p.add_argument("--daemon", action="store_true", help="Run all loops continuously")
     return p
 
 
