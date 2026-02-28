@@ -4,12 +4,23 @@ import argparse
 import asyncio
 from typing import Dict, List, Optional
 
+import aiosqlite
+
 from app.config import load_settings
 from app.db.prices import (
+    _connect as prices_connect,
+    get_all_dates_with_conn,
     get_recent_candles_upto,
+    get_recent_candles_upto_with_conn,
     get_window_metrics_prev20,
+    get_window_metrics_prev20_with_conn,
 )
-from app.db.indicators import upsert_indicator, has_indicator
+from app.db.indicators import (
+    _connect as indicators_connect,
+    get_all_dates_with_conn as get_indicator_dates_with_conn,
+    upsert_indicator,
+    upsert_indicators_bulk,
+)
 from app.logger import setup_logger
 
 
@@ -43,6 +54,8 @@ async def compute_for_candle(
     timeframe: str,
     current_date: int,  # candle OPEN time (seconds UTC)
     log,
+    prices_conn: Optional[aiosqlite.Connection] = None,
+    indicators_conn: Optional[aiosqlite.Connection] = None,
 ) -> None:
     """
     Compute indicators for specific candle.
@@ -50,17 +63,29 @@ async def compute_for_candle(
 
 
     # 1️⃣ Get window metrics from SQL (prev 20 candles)
-    window = await get_window_metrics_prev20(symbol, timeframe, current_date)
+    if prices_conn is None:
+        window = await get_window_metrics_prev20(symbol, timeframe, current_date)
+    else:
+        window = await get_window_metrics_prev20_with_conn(prices_conn, symbol, timeframe, current_date)
     if not window:
         return
 
     # 2️⃣ Get recent candles (need 15 for ATR + current candle)
-    candles = await get_recent_candles_upto(
-        symbol,
-        timeframe,
-        current_date,
-        20
-    )
+    if prices_conn is None:
+        candles = await get_recent_candles_upto(
+            symbol,
+            timeframe,
+            current_date,
+            20,
+        )
+    else:
+        candles = await get_recent_candles_upto_with_conn(
+            prices_conn,
+            symbol,
+            timeframe,
+            current_date,
+            20,
+        )
     if not candles or len(candles) < 15:
         return
 
@@ -84,7 +109,14 @@ async def compute_for_candle(
         "rvol": rvol,
     }
 
-    await upsert_indicator(symbol, timeframe, current_date, values)
+    await upsert_indicator(
+        symbol,
+        timeframe,
+        current_date,
+        values,
+        conn=indicators_conn,
+        commit=indicators_conn is None,
+    )
 
     log.info(
         f"{symbol} {timeframe} @ {current_date} | "
@@ -102,34 +134,105 @@ async def precompute_all(timeframe: str) -> None:
     """
 
     from app.universe import build_universe
-    from app.db.prices import get_all_dates
-    from app.db.indicators import indicator_exists
-
     log = setup_logger("indicators-precompute")
-    settings = load_settings(require_keys=False)
-
     symbols = await build_universe(force_refresh=False)
 
     for sym in symbols:
         try:
-            dates = await get_all_dates(sym, timeframe)
-            if not dates or len(dates) < 20:
-                continue
-
-            for current_date in dates:
-                # skip if already computed
-                if await indicator_exists(sym, timeframe, current_date):
+            prices_conn = await prices_connect()
+            indicators_conn = await indicators_connect()
+            try:
+                dates = await get_all_dates_with_conn(prices_conn, sym, timeframe)
+                if not dates or len(dates) < 20:
                     continue
 
-                try:
-                    await compute_for_candle(sym, timeframe, current_date, log)
-                except Exception as e:
-                    log.error(f"Indicator error {sym} @ {current_date}: {e}")
+                existing_indicator_dates = set(
+                    await get_indicator_dates_with_conn(indicators_conn, sym, timeframe)
+                )
+
+                pending_rows: List[tuple[str, str, int, Dict[str, float]]] = []
+                for current_date in dates:
+                    # skip if already computed
+                    if current_date in existing_indicator_dates:
+                        continue
+
+                    try:
+                        values = await _compute_values_for_candle(
+                            sym,
+                            timeframe,
+                            current_date,
+                            prices_conn,
+                        )
+                        if not values:
+                            continue
+                        pending_rows.append((sym, timeframe, current_date, values))
+                        existing_indicator_dates.add(current_date)
+
+                        if len(pending_rows) >= 200:
+                            count = await upsert_indicators_bulk(
+                                pending_rows,
+                                conn=indicators_conn,
+                                commit=True,
+                            )
+                            pending_rows.clear()
+                            log.info(f"{sym} {timeframe} batch upsert={count}")
+                    except Exception as e:
+                        log.error(f"Indicator error {sym} @ {current_date}: {e}")
+
+                if pending_rows:
+                    count = await upsert_indicators_bulk(
+                        pending_rows,
+                        conn=indicators_conn,
+                        commit=True,
+                    )
+                    log.info(f"{sym} {timeframe} final batch upsert={count}")
+            finally:
+                await prices_conn.close()
+                await indicators_conn.close()
 
         except Exception as e:
             log.error(f"Precompute error {sym}: {e}")
 
     log.info("Precompute done.")
+
+
+async def _compute_values_for_candle(
+    symbol: str,
+    timeframe: str,
+    current_date: int,
+    prices_conn: aiosqlite.Connection,
+) -> Optional[Dict[str, float]]:
+    window = await get_window_metrics_prev20_with_conn(prices_conn, symbol, timeframe, current_date)
+    if not window:
+        return None
+
+    candles = await get_recent_candles_upto_with_conn(
+        prices_conn,
+        symbol,
+        timeframe,
+        current_date,
+        20,
+    )
+    if not candles or len(candles) < 15:
+        return None
+
+    atr14 = compute_atr14(candles[-15:])
+    if atr14 is None:
+        return None
+
+    _, _, _, _, close, volume = candles[-1]
+    avg_vol20 = window["avg_vol20"]
+    rvol = volume / avg_vol20 if avg_vol20 > 0 else 0.0
+    atr_pct = atr14 / close if close > 0 else 0.0
+
+    return {
+        "atr14": atr14,
+        "atr_pct": atr_pct,
+        "hh20": window["hh20"],
+        "ll20": window["ll20"],
+        "avg_vol20": avg_vol20,
+        "rvol": rvol,
+    }
 
 
 def main():

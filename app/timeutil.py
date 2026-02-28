@@ -52,3 +52,18 @@ def candle_close_ts(candle: dict, timeframe_s: int) -> int:
     """
     open_s = candle_open_ts(candle)
     return int(open_s + timeframe_s)
+
+
+def timeframe_to_seconds(timeframe: str | int) -> int:
+    """Convert timeframe minutes (e.g. 240) into seconds."""
+    return int(timeframe) * 60
+
+
+def candle_close_from_open(open_ts_s: int, timeframe: str | int) -> int:
+    """Given candle OPEN timestamp, return candle CLOSE timestamp (seconds UTC)."""
+    return int(open_ts_s) + timeframe_to_seconds(timeframe)
+
+
+def candle_open_from_close(close_ts_s: int, timeframe: str | int) -> int:
+    """Given candle CLOSE timestamp, return candle OPEN timestamp (seconds UTC)."""
+    return int(close_ts_s) - timeframe_to_seconds(timeframe)

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 import aiosqlite
 
 from app.config import load_settings
 
 from app.db._db import fetch_one
-
-from app.db.prices import get_all_dates
 
 # Row: (date, atr14, atr_pct, hh20, ll20, avg_vol20, rvol)
 IndicatorRow = Tuple[int, float, float, float, float, float, float]
@@ -27,6 +25,8 @@ async def upsert_indicator(
     timeframe: str,
     date: int,  # candle OPEN time (seconds UTC), same as prices.date
     values: Dict[str, float],
+    conn: Optional[aiosqlite.Connection] = None,
+    commit: bool = True,
 ) -> None:
     """
     Insert/update indicator row for a candle.
@@ -44,7 +44,10 @@ async def upsert_indicator(
       avg_vol20=excluded.avg_vol20,
       rvol=excluded.rvol
     """
-    conn = await _connect()
+    owns_conn = conn is None
+    if conn is None:
+        conn = await _connect()
+
     try:
         await conn.execute(
             sql,
@@ -60,9 +63,61 @@ async def upsert_indicator(
                 float(values.get("rvol", 0.0)),
             ),
         )
-        await conn.commit()
+        if commit:
+            await conn.commit()
     finally:
-        await conn.close()
+        if owns_conn:
+            await conn.close()
+
+
+async def upsert_indicators_bulk(
+    rows: Iterable[tuple[str, str, int, Dict[str, float]]],
+    conn: Optional[aiosqlite.Connection] = None,
+    commit: bool = True,
+) -> int:
+    sql = """
+    INSERT INTO indicators(symbol, timeframe, date, atr14, atr_pct, hh20, ll20, avg_vol20, rvol)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(symbol, timeframe, date) DO UPDATE SET
+      atr14=excluded.atr14,
+      atr_pct=excluded.atr_pct,
+      hh20=excluded.hh20,
+      ll20=excluded.ll20,
+      avg_vol20=excluded.avg_vol20,
+      rvol=excluded.rvol
+    """
+
+    payload = [
+        (
+            symbol,
+            timeframe,
+            int(date),
+            float(values.get("atr14", 0.0)),
+            float(values.get("atr_pct", 0.0)),
+            float(values.get("hh20", 0.0)),
+            float(values.get("ll20", 0.0)),
+            float(values.get("avg_vol20", 0.0)),
+            float(values.get("rvol", 0.0)),
+        )
+        for symbol, timeframe, date, values in rows
+    ]
+
+    if not payload:
+        return 0
+
+    owns_conn = conn is None
+    if conn is None:
+        conn = await _connect()
+
+    try:
+        await conn.executemany(sql, payload)
+        if commit:
+            await conn.commit()
+    finally:
+        if owns_conn:
+            await conn.close()
+
+    return len(payload)
 
 
 async def has_indicator(symbol: str, timeframe: str, date: int) -> bool:
@@ -146,3 +201,40 @@ async def indicator_exists(symbol: str, timeframe: str, date: int) -> bool:
         (symbol, timeframe, int(date)),
     )
     return row is not None
+
+
+async def indicator_exists_with_conn(
+    conn: aiosqlite.Connection,
+    symbol: str,
+    timeframe: str,
+    date: int,
+) -> bool:
+    cur = await conn.execute(
+        """
+        SELECT 1
+        FROM indicators
+        WHERE symbol=? AND timeframe=? AND date=?
+        LIMIT 1
+        """,
+        (symbol, timeframe, int(date)),
+    )
+    row = await cur.fetchone()
+    return row is not None
+
+
+async def get_all_dates_with_conn(
+    conn: aiosqlite.Connection,
+    symbol: str,
+    timeframe: str,
+) -> list[int]:
+    cur = await conn.execute(
+        """
+        SELECT date
+        FROM indicators
+        WHERE symbol=? AND timeframe=?
+        ORDER BY date ASC
+        """,
+        (symbol, timeframe),
+    )
+    rows = await cur.fetchall()
+    return [int(r[0]) for r in rows]
