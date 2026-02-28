@@ -16,6 +16,14 @@ async def health_loop(state: ManagerState, log_interval_sec: int, liveness_timeo
             last_heartbeat_ts = state.last_heartbeat_ts
             dropped_ticks = state.dropped_ticks
 
+            is_stale = (
+                ws_state == "CONNECTED"
+                and bool(last_heartbeat_ts)
+                and (now - last_heartbeat_ts) > liveness_timeout_sec
+            )
+            if is_stale:
+                state.force_reconnect = True
+
         log.info(
             "TM HEARTBEAT ws=%s open=%s subscribed=%s dropped_ticks=%s",
             ws_state,
@@ -24,6 +32,8 @@ async def health_loop(state: ManagerState, log_interval_sec: int, liveness_timeo
             dropped_ticks,
         )
 
+        if is_stale:
+            log.warning("TM LIVENESS stale heartbeat=%ss, scheduling reconnect", now - last_heartbeat_ts)
         if ws_state == "CONNECTED" and last_heartbeat_ts:
             if (now - last_heartbeat_ts) > liveness_timeout_sec:
                 log.warning("TM LIVENESS stale heartbeat=%ss", now - last_heartbeat_ts)

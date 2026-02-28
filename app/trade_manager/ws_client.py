@@ -97,10 +97,17 @@ async def ws_loop(state: ManagerState, ws_url: str, hit_mode: str, log) -> None:
                     state.ws_state = "CONNECTED"
                     state.subscribed_symbols.clear()
                     state.last_heartbeat_ts = int(time.time())
+                    state.force_reconnect = False
                 attempt = 0
 
                 while True:
                     await _sync_subscriptions(ws, state)
+
+                    async with state.global_lock:
+                        force_reconnect = state.force_reconnect
+                    if force_reconnect:
+                        log.warning("TM WS force reconnect triggered by liveness checker")
+                        break
 
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
@@ -139,3 +146,10 @@ async def ws_loop(state: ManagerState, ws_url: str, hit_mode: str, log) -> None:
             attempt += 1
             log.warning("TM WS disconnected (%s), retry in %ss", exc, delay)
             await asyncio.sleep(delay)
+        else:
+            async with state.global_lock:
+                state.ws_state = "DISCONNECTED"
+                state.subscribed_symbols.clear()
+                state.force_reconnect = False
+            # closed intentionally (e.g. force reconnect)
+            await asyncio.sleep(0)

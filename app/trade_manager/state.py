@@ -19,6 +19,7 @@ class ManagerState:
     ws_state: str = "DISCONNECTED"
     last_heartbeat_ts: int = 0
     last_tick_ts: int = 0
+    force_reconnect: bool = False
 
     def get_symbol_lock(self, symbol: str) -> asyncio.Lock:
         lock = self.symbol_locks.get(symbol)
