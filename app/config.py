@@ -52,6 +52,7 @@ class Settings:
     prices_db: Path
     indicators_db: Path
     signals_db: Path
+    trade_manager_db: Path
     logs_dir: Path
 
 
@@ -89,5 +90,6 @@ def load_settings(require_keys: bool = False) -> Settings:
         prices_db=db_dir / "prices.db",
         indicators_db=db_dir / "indicators.db",
         signals_db=db_dir / "signals.db",
+        trade_manager_db=db_dir / "trade_manager.db",
         logs_dir=logs_dir,
     )

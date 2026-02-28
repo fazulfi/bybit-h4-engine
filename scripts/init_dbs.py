@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import sqlite3
+import sys
 from pathlib import Path
+# Allow running as: python scripts/<file>.py
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
+import sqlite3
 from app.config import load_settings
 
 # Catatan:
-# - Kita pakai 3 DB terpisah: prices, indicators, signals
+# - Kita pakai 4 DB terpisah: prices, indicators, signals, trade_manager
 # - Semua pakai WAL + synchronous NORMAL (cukup aman + jauh lebih cepat)
 
 
@@ -102,12 +107,69 @@ CREATE INDEX IF NOT EXISTS idx_signals_created_at
 """
 
 
+TRADE_MANAGER_SQL = """
+CREATE TABLE IF NOT EXISTS virtual_positions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  signal_key TEXT NOT NULL UNIQUE,
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  signal_date INTEGER NOT NULL,
+  signal_created_at INTEGER NOT NULL,
+  signal_type TEXT NOT NULL,
+  side TEXT NOT NULL,
+  entry REAL NOT NULL,
+  sl REAL NOT NULL,
+  tp REAL NOT NULL,
+  opened_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  closed_at INTEGER,
+  close_reason TEXT,
+  close_price REAL,
+  hit_source TEXT,
+  last_tick_ts INTEGER,
+  last_tick_price REAL,
+  meta_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS position_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pos_id INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  price REAL,
+  bid REAL,
+  ask REAL,
+  payload_json TEXT,
+  error TEXT,
+  FOREIGN KEY (pos_id) REFERENCES virtual_positions(id)
+);
+
+CREATE TABLE IF NOT EXISTS manager_state (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vp_status_symbol
+  ON virtual_positions(status, symbol);
+CREATE INDEX IF NOT EXISTS idx_vp_close_reason
+  ON virtual_positions(close_reason);
+CREATE INDEX IF NOT EXISTS idx_vp_opened_at
+  ON virtual_positions(opened_at);
+CREATE INDEX IF NOT EXISTS idx_events_ts
+  ON position_events(ts);
+"""
+
+
 def main() -> None:
     s = load_settings(require_keys=False)
 
     _exec(s.prices_db, PRICES_SQL)
     _exec(s.indicators_db, INDICATORS_SQL)
     _exec(s.signals_db, SIGNALS_SQL)
+    _exec(s.trade_manager_db, TRADE_MANAGER_SQL)
 
     print("✅ All DB schemas created.")
 
