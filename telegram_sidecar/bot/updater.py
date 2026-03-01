@@ -60,5 +60,7 @@ async def auto_update(bot: Bot) -> None:
                     touch_session(session)
             except Exception:
                 logger.exception("auto_update failed for chat_id=%s message_id=%s", chat_id, message_id)
+                    session["hash"] = content_hash
+            except Exception:
                 continue
         await asyncio.sleep(interval)
