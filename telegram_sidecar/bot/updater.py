@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from telegram import Bot
 
@@ -10,9 +11,11 @@ from telegram_sidecar.formatter.engine import format_engine
 from telegram_sidecar.bot.hashutil import compute_hash
 from telegram_sidecar.models.viewmodels import EngineViewModel
 from telegram_sidecar.bot.pollutil import safe_poll_interval
+from telegram_sidecar.bot.session_store import cleanup_sessions, touch_session
 
 # NOTE: Volatile in-memory session store. Sessions are reset on process restart.
-sessions: dict[tuple[int, int], dict[str, str]] = {}
+sessions: dict[tuple[int, int], dict[str, object]] = {}
+logger = logging.getLogger(__name__)
 
 
 
@@ -35,6 +38,10 @@ async def auto_update(bot: Bot) -> None:
     interval = safe_poll_interval(settings.get("POLL_INTERVAL_SEC"))
 
     while True:
+        removed = cleanup_sessions(sessions)
+        if removed:
+            logger.debug("session cleanup removed=%s remaining=%s", removed, len(sessions))
+
         for key, session in list(sessions.items()):
             chat_id, message_id = key
             try:
@@ -48,6 +55,11 @@ async def auto_update(bot: Bot) -> None:
                         text=text,
                         parse_mode="HTML",
                     )
+                    touch_session(session, hash_value=content_hash)
+                else:
+                    touch_session(session)
+            except Exception:
+                logger.exception("auto_update failed for chat_id=%s message_id=%s", chat_id, message_id)
                     session["hash"] = content_hash
             except Exception:
                 continue
