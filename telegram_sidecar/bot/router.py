@@ -27,6 +27,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    settings = load_settings()
+    allowed_user_ids = settings["ALLOWED_USER_IDS"]
+    user_id = update.effective_user.id if update.effective_user else 0
+
+    if allowed_user_ids and user_id not in allowed_user_ids:
+        return
+
     query = update.callback_query
     await query.answer()
 
