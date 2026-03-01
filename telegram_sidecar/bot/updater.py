@@ -42,8 +42,7 @@ async def auto_update(bot: Bot) -> None:
         if removed:
             logger.debug("session cleanup removed=%s remaining=%s", removed, len(sessions))
 
-        for key, session in list(sessions.items()):
-            chat_id, message_id = key
+        for (chat_id, message_id), session in list(sessions.items()):
             try:
                 vm = await _fetch_engine_vm_with_fallback()
                 text = format_engine(vm)
@@ -59,8 +58,9 @@ async def auto_update(bot: Bot) -> None:
                 else:
                     touch_session(session)
             except Exception:
-                logger.exception("auto_update failed for chat_id=%s message_id=%s", chat_id, message_id)
-                    session["hash"] = content_hash
-            except Exception:
-                continue
+                logger.exception(
+                    "auto_update failed for chat_id=%s message_id=%s",
+                    chat_id,
+                    message_id,
+                )
         await asyncio.sleep(interval)
