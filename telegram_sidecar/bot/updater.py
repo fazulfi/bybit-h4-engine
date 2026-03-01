@@ -38,29 +38,51 @@ async def auto_update(bot: Bot) -> None:
     interval = safe_poll_interval(settings.get("POLL_INTERVAL_SEC"))
 
     while True:
-        removed = cleanup_sessions(sessions)
-        if removed:
-            logger.debug("session cleanup removed=%s remaining=%s", removed, len(sessions))
+        try:
+            removed = cleanup_sessions(sessions)
+            if removed:
+                logger.debug("session cleanup removed=%s remaining=%s", removed, len(sessions))
+        except Exception:
+            logger.exception("session cleanup failed")
+
+        if not sessions:
+            await asyncio.sleep(interval)
+            continue
+
+        vm = await _fetch_engine_vm_with_fallback()
+        text = format_engine(vm)
+        content_hash = compute_hash(text)
 
         for (chat_id, message_id), session in list(sessions.items()):
             try:
-                vm = await _fetch_engine_vm_with_fallback()
-                text = format_engine(vm)
-                content_hash = compute_hash(text)
-                if content_hash != session.get("hash"):
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        text=text,
-                        parse_mode="HTML",
-                    )
-                    touch_session(session, hash_value=content_hash)
-                else:
+                if content_hash == session.get("hash"):
                     touch_session(session)
-            except Exception:
+                    continue
+
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text,
+                    parse_mode="HTML",
+                )
+                touch_session(session, hash_value=content_hash)
+            except Exception as e:
+                msg = str(e).lower()
+                fatal = (
+                    "message to edit not found" in msg
+                    or "message can't be edited" in msg
+                    or "chat not found" in msg
+                    or "forbidden" in msg
+                    or "bot was blocked" in msg
+                )
+
                 logger.exception(
-                    "auto_update failed for chat_id=%s message_id=%s",
+                    "auto_update failed for chat_id=%s message_id=%s fatal=%s",
                     chat_id,
                     message_id,
+                    fatal,
                 )
+
+                if fatal:
+                    sessions.pop((chat_id, message_id), None)
         await asyncio.sleep(interval)
